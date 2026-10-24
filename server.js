@@ -127,6 +127,60 @@ app.put('/api/v1/clients/:id', (req, res) => {
 
   /* ---------- Update code below ----------*/
 
+  if (status && status !== 'backlog' && status !== 'in-progress' && status !== 'complete') {
+    return res.status(400).send({
+      'message': 'Invalid status provided.',
+      'long_message': 'Status can only be one of the following: [backlog | in-progress | complete].',
+    });
+  }
+
+  if (priority !== undefined) {
+    const priorityCheck = validatePriority(priority);
+    if (!priorityCheck.valid) {
+      return res.status(400).send(priorityCheck.messageObj);
+    }
+  }
+
+  const currentStatus = client.status;
+  const currentPriority = client.priority;
+  const targetStatus = status || currentStatus;
+
+  let targetPriority = priority;
+  const targetStatusClients = clients.filter(c => c.status === targetStatus && c.id !== id);
+
+  if (targetPriority === undefined) {
+    targetPriority = targetStatusClients.length + 1;
+  }
+
+  const updateTransaction = db.transaction(() => {
+    if (currentStatus === targetStatus) {
+      if (currentPriority < targetPriority) {
+        db.prepare('update clients set priority = priority - 1 where status = ? and priority > ? and priority <= ?')
+          .run(targetStatus, currentPriority, targetPriority);
+      } else if (currentPriority > targetPriority) {
+        db.prepare('update clients set priority = priority + 1 where status = ? and priority >= ? and priority < ?')
+          .run(targetStatus, targetPriority, currentPriority);
+      }
+    } else {
+      db.prepare('update clients set priority = priority - 1 where status = ? and priority > ?')
+        .run(currentStatus, currentPriority);
+
+      db.prepare('update clients set priority = priority + 1 where status = ? and priority >= ?')
+        .run(targetStatus, targetPriority);
+    }
+
+    db.prepare('update clients set status = ?, priority = ? where id = ?')
+      .run(targetStatus, targetPriority, id);
+  });
+
+  try {
+    updateTransaction();
+    clients = db.prepare('select * from clients').all();
+    return res.status(200).send(clients);
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+
 
 
   return res.status(200).send(clients);
